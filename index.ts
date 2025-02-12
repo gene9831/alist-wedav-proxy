@@ -24,7 +24,20 @@ app.use(
       },
       proxyRes: responseInterceptor(
         async (responseBuffer, proxyRes, req, res) => {
+          if (req.headers['range']) {
+            console.log(req.headers)
+            console.log(proxyRes.statusCode)
+            console.log(proxyRes.headers)
+          }
+          // TODO 条件
+          // 1. req.headers有range
+          // 2. proxyRes.statusCode 为 3xx
+          // 3. proxyRes.headers有location
+          // 如何返回stream
+
           if (!/xml/.test(proxyRes.headers['content-type'] || '')) {
+            console.log(proxyRes.headers['content-type'])
+            console.log(responseBuffer.length)
             return responseBuffer
           }
 
@@ -37,12 +50,15 @@ app.use(
 
             // 在 XML 中新增一个目录响应
             const testDirectory = {
-              'D:href': ['/dav/Test/'],
+              'D:href': ['/dav/ProxyTest/'],
               'D:propstat': [
                 {
                   'D:prop': [
                     {
-                      'D:displayname': ['Test'],
+                      'D:resourcetype': [
+                        { 'D:collection': [{ $: { 'xmlns:D': 'DAV:' } }] },
+                      ],
+                      'D:displayname': ['ProxyTest'],
                     },
                   ],
                   'D:status': ['HTTP/1.1 200 OK'],
