@@ -4,6 +4,29 @@ import { parseXML } from './dav/dav'
 const xmlStr =
   '<?xml version="1.0" encoding="UTF-8"?><D:multistatus xmlns:D="DAV:"><D:response><D:href>/dav/TV-Shows/Test/</D:href><D:propstat><D:prop><D:resourcetype><D:collection xmlns:D="DAV:"/></D:resourcetype><D:displayname>Test</D:displayname><D:creationdate>2025-02-16T03:21:39Z</D:creationdate><D:supportedlock><D:lockentry xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockentry></D:supportedlock><D:getlastmodified>Sun, 16 Feb 2025 03:22:13 GMT</D:getlastmodified></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/TV-Shows/Test/encrypted.json</D:href><D:propstat><D:prop><D:supportedlock><D:lockentry xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockentry></D:supportedlock><D:getlastmodified>Sat, 15 Feb 2025 18:24:05 GMT</D:getlastmodified><D:getcontenttype>application/json</D:getcontenttype><D:resourcetype></D:resourcetype><D:displayname>encrypted.json</D:displayname><D:getcontentlength>267</D:getcontentlength><D:creationdate>2025-02-16T03:21:58Z</D:creationdate><D:getetag>"182474dc5dd9400010b"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/TV-Shows/Test/encrypted.mp4</D:href><D:propstat><D:prop><D:resourcetype></D:resourcetype><D:displayname>encrypted.mp4</D:displayname><D:getcontentlength>406240008</D:getcontentlength><D:creationdate>2025-02-16T03:22:13Z</D:creationdate><D:getetag>"182474ba72a4dc001836bb08"</D:getetag><D:getlastmodified>Sat, 15 Feb 2025 18:21:40 GMT</D:getlastmodified><D:getcontenttype>video/mp4</D:getcontenttype><D:supportedlock><D:lockentry xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockentry></D:supportedlock></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>'
 
+function addNamespaceDeclaration(
+  obj: Record<string, any>,
+  key: string,
+  nsPrefix: string,
+  ns: string,
+) {
+  if (!(key in obj)) {
+    return
+  }
+
+  if (typeof obj[key] === 'object' && obj[key] !== null) {
+    obj[key][`@xmlns:${nsPrefix}`] = ns
+  } else if (typeof obj[key] === 'string') {
+    const text = obj[key]
+    obj[key] = {
+      [`@xmlns:${nsPrefix}`]: ns,
+      text,
+    }
+  }
+}
+
+const keysToAddNsDeclaration = ['multistatus', 'collection', 'lockentry']
+
 function addNamespaces(
   obj: Record<string, any>,
   nsPrefix: string,
@@ -17,9 +40,9 @@ function addNamespaces(
     return obj.map((item) => addNamespaces(item, nsPrefix, ns)) // 如果是数组，递归处理每一项
   }
 
-  if ('multistatus' in obj) {
-    obj.multistatus[`@xmlns:${nsPrefix}`] = ns
-  }
+  keysToAddNsDeclaration.forEach((key) =>
+    addNamespaceDeclaration(obj, key, nsPrefix, ns),
+  )
 
   // 如果是对象，遍历每个键并加上前缀
   const result = Object.entries(obj).reduce((result, [key, value]) => {
