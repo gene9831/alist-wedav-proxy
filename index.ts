@@ -3,6 +3,7 @@ import express from 'express'
 import http from 'http'
 import { createProxyMiddleware } from 'http-proxy-middleware'
 import { jsonObj2XML, parseXML, validateXML } from './dav/dav'
+import type { DAVResultResponse } from './dav/types'
 
 const handlePropfind = (
   proxyRes: http.IncomingMessage,
@@ -27,6 +28,25 @@ const handlePropfind = (
 
       const result = await parseXML(xmlStr)
       const responses = result.multistatus.response
+
+      // 匹配例如 xxx-encrypted-key.json
+      const keyNameRegExp = /(.+-)?encrypted-key\.json$/
+      // 匹配例如 xxx-encrypted-data.mp4
+      const dataNameRegExp = /(.+-)?encrypted-data\.[a-zA-Z0-9]+$/
+
+      const encryptedKeyResps: DAVResultResponse[] = []
+      const encryptedDataResps: DAVResultResponse[] = []
+      const normalResps: DAVResultResponse[] = []
+
+      for (const resp of responses) {
+        if (keyNameRegExp.test(resp.href)) {
+          encryptedKeyResps.push(resp)
+        } else if (dataNameRegExp.test(resp.href)) {
+          encryptedDataResps.push(resp)
+        } else {
+          normalResps.push(resp)
+        }
+      }
 
       const metaDataResp = responses.find((item) =>
         item.href.endsWith('encrypted.json'),
