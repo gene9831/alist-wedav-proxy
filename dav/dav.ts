@@ -1,4 +1,4 @@
-import { XMLParser } from 'fast-xml-parser'
+import { XMLBuilder, XMLParser, XMLValidator } from 'fast-xml-parser'
 import nestedProp from 'nested-property'
 import type {
   DAVResult,
@@ -80,9 +80,9 @@ function getPropertyOfType(
   type: PropertyType = PropertyType.Original,
 ): any {
   const val = nestedProp.get(obj, prop)
-  if (type === 'array' && Array.isArray(val) === false) {
+  if (type === PropertyType.Array && Array.isArray(val) === false) {
     return [val]
-  } else if (type === 'object' && Array.isArray(val)) {
+  } else if (type === PropertyType.Object && Array.isArray(val)) {
     return val[0]
   }
   return val
@@ -164,3 +164,68 @@ export function parseXML(
     resolve(normaliseResult(result))
   })
 }
+
+function addNamespaceDeclaration(
+  obj: any,
+  key: string,
+  nsPrefix: string,
+  ns: string,
+) {
+  if (!(key in obj)) {
+    return
+  }
+
+  if (typeof obj[key] === 'object' && obj[key] !== null) {
+    obj[key][`@xmlns:${nsPrefix}`] = ns
+  } else if (typeof obj[key] === 'string') {
+    const text = obj[key]
+    obj[key] = {
+      [`@xmlns:${nsPrefix}`]: ns,
+      text,
+    }
+  }
+}
+
+const keysToAddNSDeclaration = ['multistatus', 'collection', 'lockentry']
+
+function addNamespaces(obj: any, nsPrefix: string, ns: string): any {
+  if (typeof obj !== 'object' || obj === null) {
+    return obj // 如果是基本类型（非对象），则直接返回
+  }
+
+  if (Array.isArray(obj)) {
+    return obj.map((item) => addNamespaces(item, nsPrefix, ns)) // 如果是数组，递归处理每一项
+  }
+
+  keysToAddNSDeclaration.forEach((key) =>
+    addNamespaceDeclaration(obj, key, nsPrefix, ns),
+  )
+
+  // 如果是对象，遍历每个键并加上前缀
+  const result = Object.entries(obj).reduce((result, [key, value]) => {
+    const newKey =
+      key.startsWith('@') || key === 'text' ? key : `${nsPrefix}:${key}`
+    result[newKey] = addNamespaces(value, nsPrefix, ns) // 递归处理值
+    return result
+  }, {} as any)
+
+  return result
+}
+
+export function jsonObj2XML(obj: any) {
+  const builder = new XMLBuilder({
+    attributeNamePrefix: '@',
+    textNodeName: 'text',
+    ignoreAttributes: false,
+  })
+
+  const data = addNamespaces(obj, 'D', 'DAV:')
+
+  const res = builder.build(data)
+
+  // TODO 这里直接加上 encoding="UTF-8" 是否可行
+  return `<?xml version="1.0" encoding="UTF-8"?>${res}`
+}
+
+export const validateXML = (xmlData: string) =>
+  XMLValidator.validate(xmlData, { allowBooleanAttributes: true })

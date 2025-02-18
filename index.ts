@@ -2,11 +2,7 @@ import type { Request, Response } from 'express'
 import express from 'express'
 import http from 'http'
 import { createProxyMiddleware } from 'http-proxy-middleware'
-import { Builder, parseStringPromise } from 'xml2js'
-
-const xmlBuilder = new Builder({
-  renderOpts: { pretty: false, indent: '', newline: '' },
-})
+import { jsonObj2XML, parseXML, validateXML } from './dav/dav'
 
 const handlePropfind = (
   proxyRes: http.IncomingMessage,
@@ -23,18 +19,20 @@ const handlePropfind = (
     const data = Buffer.concat(buffers)
 
     try {
-      const result = await parseStringPromise(data.toString('utf-8'))
-      const responses = result?.['D:multistatus']?.['D:response']
+      const xmlStr = data.toString('utf-8')
 
-      if (!Array.isArray(responses)) {
-        throw new Error()
+      if (!validateXML(xmlStr)) {
+        throw new Error('InvalidXML')
       }
 
+      const result = await parseXML(xmlStr)
+      const responses = result.multistatus.response
+
       const metaDataResp = responses.find((item) =>
-        item['D:href'][0].endsWith('encrypted.json'),
+        item.href.endsWith('encrypted.json'),
       )
       const encryptedDataResp = responses.find((item) =>
-        item['D:href'][0].endsWith('encrypted.mp4'),
+        item.href.endsWith('encrypted.mp4'),
       )
 
       if (!metaDataResp || !encryptedDataResp) {
@@ -42,7 +40,7 @@ const handlePropfind = (
       }
 
       const url = new URL(webdavTarget)
-      url.pathname = metaDataResp['D:href']
+      url.pathname = metaDataResp.href
 
       const resp = await fetch(url, {
         method: 'GET',
@@ -53,25 +51,24 @@ const handlePropfind = (
 
       const metaData = await resp.json()
 
-      const copied = structuredClone(encryptedDataResp)
+      const copiedMetaData = structuredClone(encryptedDataResp)
 
-      copied['D:href'][0] = (copied['D:href'][0] as string)
+      copiedMetaData.href = copiedMetaData.href
         .split('/')
         .slice(0, -1)
         .concat(encodeURIComponent(metaData.filename))
         .join('/')
 
-      if (copied['D:propstat'][0]['D:prop'][0]['D:displayname']?.[0]) {
-        copied['D:propstat'][0]['D:prop'][0]['D:displayname'][0] =
-          metaData.filename
+      if (copiedMetaData.propstat?.prop.displayname) {
+        copiedMetaData.propstat.prop.displayname = metaData.filename
       }
 
       // TODO 还需要处理文件的 PROPFIND 和 GET
-      responses.push(copied)
+      responses.push(copiedMetaData)
 
       console.log(JSON.stringify(responses))
 
-      const newData = xmlBuilder.buildObject(result)
+      const newData = jsonObj2XML(result)
 
       res.write(newData, 'utf-8')
     } catch (err) {
