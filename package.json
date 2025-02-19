@@ -12,6 +12,7 @@
   "dependencies": {
     "express": "^4.21.2",
     "fast-xml-parser": "^4.5.1",
+    "flat-cache": "^6.1.6",
     "http-proxy-middleware": "^3.0.3",
     "nested-property": "^4.0.0"
   }
