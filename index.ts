@@ -3,7 +3,11 @@ import express from 'express'
 import http from 'http'
 import { createProxyMiddleware } from 'http-proxy-middleware'
 import { jsonObj2XML, parseXML, validateXML } from './dav/dav'
-import type { DAVResultResponse } from './dav/types'
+import type { DAVResult, DAVResultResponse } from './dav/types'
+
+function escapeRegex(string: string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') // 转义所有特殊字符
+}
 
 const handlePropfind = (
   proxyRes: http.IncomingMessage,
@@ -29,66 +33,83 @@ const handlePropfind = (
       const result = await parseXML(xmlStr)
       const responses = result.multistatus.response
 
-      // 匹配例如 xxx-encrypted-key.json
-      const keyNameRegExp = /(.+-)?encrypted-key\.json$/
-      // 匹配例如 xxx-encrypted-data.mp4
-      const dataNameRegExp = /(.+-)?encrypted-data\.[a-zA-Z0-9]+$/
+      // 匹配例如 xxx-enc-key.json
+      const keyNameRegExp = /^(.+-)?enc-key\.json$/
+      // 匹配例如 xxx-enc-data.mp4
+      const dataNameRegExp = /^(.+-)?enc-data\.[a-zA-Z0-9]+$/
 
-      const encryptedKeyResps: DAVResultResponse[] = []
-      const encryptedDataResps: DAVResultResponse[] = []
+      const encKeyResps: DAVResultResponse[] = []
+      const encDataResps: DAVResultResponse[] = []
       const normalResps: DAVResultResponse[] = []
 
       for (const resp of responses) {
-        if (keyNameRegExp.test(resp.href)) {
-          encryptedKeyResps.push(resp)
-        } else if (dataNameRegExp.test(resp.href)) {
-          encryptedDataResps.push(resp)
+        if (
+          keyNameRegExp.test(resp.href) &&
+          !resp.propstat?.prop.resourcetype.collection
+        ) {
+          encKeyResps.push(resp)
+        } else if (
+          dataNameRegExp.test(resp.href) &&
+          !resp.propstat?.prop.resourcetype.collection
+        ) {
+          encDataResps.push(resp)
         } else {
           normalResps.push(resp)
         }
       }
 
-      const metaDataResp = responses.find((item) =>
-        item.href.endsWith('encrypted.json'),
-      )
-      const encryptedDataResp = responses.find((item) =>
-        item.href.endsWith('encrypted.mp4'),
-      )
-
-      if (!metaDataResp || !encryptedDataResp) {
+      if (encKeyResps.length === 0) {
         throw new Error()
       }
 
-      const url = new URL(webdavTarget)
-      url.pathname = metaDataResp.href
+      const encPairResps: {
+        key: DAVResultResponse
+        data: DAVResultResponse
+      }[] = []
 
-      const resp = await fetch(url, {
-        method: 'GET',
-        headers: {
-          authorization: req.headers.authorization || '',
-        },
-      })
-
-      const metaData = await resp.json()
-
-      const copiedMetaData = structuredClone(encryptedDataResp)
-
-      copiedMetaData.href = copiedMetaData.href
-        .split('/')
-        .slice(0, -1)
-        .concat(encodeURIComponent(metaData.filename))
-        .join('/')
-
-      if (copiedMetaData.propstat?.prop.displayname) {
-        copiedMetaData.propstat.prop.displayname = metaData.filename
+      for (const keyResp of encKeyResps) {
+        const prefix = keyResp.href.replace('enc-key.json', '')
+        const regExp = new RegExp(
+          `^${escapeRegex(prefix)}enc-data\\.[a-zA-Z0-9]+$`,
+        )
+        const dataResp = encDataResps.find((item) => regExp.test(item.href))
+        if (dataResp) {
+          encPairResps.push({ key: keyResp, data: dataResp })
+        }
       }
 
-      // TODO 还需要处理文件的 PROPFIND 和 GET
-      responses.push(copiedMetaData)
+      for (const { key, data } of encPairResps) {
+        const url = new URL(webdavTarget)
+        url.pathname = key.href
 
-      console.log(JSON.stringify(responses))
+        const resp = await fetch(url, {
+          method: 'GET',
+          headers: { authorization: req.headers.authorization || '' },
+        })
 
-      const newData = jsonObj2XML(result)
+        const metaData = await resp.json()
+
+        const copied = structuredClone(data)
+
+        copied.href = copied.href
+          .split('/')
+          .slice(0, -1)
+          .concat(encodeURIComponent(metaData.filename))
+          .join('/')
+
+        if (copied.propstat?.prop.displayname) {
+          copied.propstat.prop.displayname = metaData.filename
+        }
+
+        // TODO 还需要处理文件的 PROPFIND 和 GET
+        normalResps.push(copied)
+      }
+
+      const newResult: DAVResult = {
+        multistatus: { response: normalResps },
+      }
+
+      const newData = jsonObj2XML(newResult)
 
       res.write(newData, 'utf-8')
     } catch (err) {
