@@ -1,12 +1,16 @@
 import type { Request, Response } from 'express'
 import express from 'express'
+import { create, type FlatCacheOptions } from 'flat-cache'
 import http from 'http'
 import { createProxyMiddleware } from 'http-proxy-middleware'
 import { jsonObj2XML, parseXML, validateXML } from './dav/dav'
 import type { DAVResult, DAVResultResponse } from './dav/types'
 
-function escapeRegex(string: string) {
-  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') // 转义所有特殊字符
+interface EncKeyData {
+  filename: string
+  algorithm: string
+  key: string
+  iv: string
 }
 
 interface EncContext {
@@ -15,7 +19,43 @@ interface EncContext {
   filename: string
 }
 
-const encContextMaps = new Map<string, EncContext>()
+function createCache<T>(options?: FlatCacheOptions) {
+  const {
+    ttl,
+    lruSize,
+    expirationInterval,
+    persistInterval,
+    cacheId,
+    cacheDir,
+    ...rest
+  } = options || {}
+  const cache = create({
+    ttl: ttl || 60 * 60 * 1000, // 1 hour
+    lruSize: lruSize || 1000, // 1,000 items
+    expirationInterval: expirationInterval || 5 * 1000 * 60, // 5 minutes
+    persistInterval: persistInterval || 5 * 1000 * 60, // 5 minutes
+    cacheId,
+    cacheDir: cacheDir || './cache',
+    ...rest,
+  })
+
+  const set = (key: string, value: T) => cache.set(key, value)
+
+  const get = (key: string): T | undefined => cache.get(key)
+
+  return {
+    cache,
+    set,
+    get,
+  }
+}
+
+const keyContentCache = createCache<EncKeyData>({ cacheId: 'key-content' })
+const encKeyDataCache = createCache<EncContext>({ cacheId: 'enc-context' })
+
+function escapeRegex(string: string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') // 转义所有特殊字符
+}
 
 const renameDAVResultResponse = (
   davResp: DAVResultResponse,
@@ -28,7 +68,7 @@ const renameDAVResultResponse = (
     .concat(encodeURIComponent(newName))
     .join('/')
 
-  encContextMaps.set(copied.href.replace(/^\/dav/, ''), {
+  encKeyDataCache.set(copied.href.replace(/^\/dav/, ''), {
     path: davResp.href.replace(/^\/dav/, ''),
     originHref: davResp.href,
     filename: newName,
@@ -91,14 +131,19 @@ const handlePropfindList = async (result: DAVResult, req: Request) => {
     const url = new URL(webdavTarget)
     url.pathname = key.href
 
-    const resp = await fetch(url, {
-      method: 'GET',
-      headers: { authorization: req.headers.authorization || '' },
-    })
+    // TODO 抽取函数
+    let encKeyData = encKeyDataCache.get(url.pathname)
 
-    const metaData = await resp.json()
+    if (!encKeyData) {
+      const resp = await fetch(url, {
+        method: 'GET',
+        headers: { authorization: req.headers.authorization || '' },
+      })
+      encKeyData = await resp.json()
+      encKeyDataCache.set(url.pathname, encKeyData)
+    }
 
-    const newResp = renameDAVResultResponse(data, metaData.filename)
+    const newResp = renameDAVResultResponse(data, encKeyData.filename)
 
     // TODO 还需要处理文件的 GET
     normalResps.push(newResp)
@@ -189,7 +234,7 @@ app.use(
     selfHandleResponse: true,
     logger: console,
     pathRewrite: (path, req) => {
-      const encContext = encContextMaps.get(path)
+      const encContext = encKeyDataCache.get(path)
       if (encContext) {
         req.context = { enc: true, encContext: encContext }
         return encContext.path
